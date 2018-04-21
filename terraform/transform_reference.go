@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/config"
 	"github.com/hashicorp/terraform/dag"
 )
@@ -17,35 +18,39 @@ import (
 // be referenced and other methods of referencing may still be possible (such
 // as by path!)
 type GraphNodeReferenceable interface {
-	// ReferenceableName is the name by which this can be referenced.
-	// This can be either just the type, or include the field. Example:
-	// "aws_instance.bar" or "aws_instance.bar.id".
-	ReferenceableName() []string
+	// ReferenceableAddrs returns a list of addresses through which this can be
+	// referenced.
+	ReferenceableAddrs() []addrs.Referenceable
 }
 
 // GraphNodeReferencer must be implemented by nodes that reference other
 // Terraform items and therefore depend on them.
 type GraphNodeReferencer interface {
-	// References are the list of things that this node references. This
-	// can include fields or just the type, just like GraphNodeReferenceable
-	// above.
-	References() []string
+	// References returns a list of references made by this node, which
+	// include both a referenced address and source location information for
+	// the reference.
+	References() []*addrs.Reference
 }
 
-// GraphNodeReferenceGlobal is an interface that can optionally be
-// implemented. If ReferenceGlobal returns true, then the References()
-// and ReferenceableName() must be _fully qualified_ with "module.foo.bar"
-// etc.
+// GraphNodeReferenceOutside is an interface that can optionally be implemented.
+// A node that implements it has an opportunity to customize which module
+// instance path its GraphNodeReferenceable and GraphNodeReferencer are
+// resolved within, overriding the default of using GraphNodeSubPath to
+// obtain the node's own containing module instance.
 //
-// This allows a node to reference and be referenced by a specific name
-// that may cross module boundaries. This can be very dangerous so use
-// this wisely.
-//
-// The primary use case for this is module boundaries (variables coming in).
-type GraphNodeReferenceGlobal interface {
-	// Set to true to signal that references and name are fully
-	// qualified. See the above docs for more information.
-	ReferenceGlobal() bool
+// The primary use-case for this is the nodes representing module input
+// variables since these are referenced within their own module but their
+// _own_ references are resolved within the parent module.
+type GraphNodeReferenceOutside interface {
+	// ReferenceOutside returns two separate paths to be used for qualifying
+	// references to other graph nodes.
+	//
+	// referenceablePath is the module instance where the GraphNodeReferenceable
+	// results are resolved.
+	//
+	// referencerPath is the module instance where the GraphNodeReferencer
+	// results are resolved.
+	ReferenceOutside() (referenceablePath, referencerPath addrs.ModuleInstance)
 }
 
 // ReferenceTransformer is a GraphTransformer that connects all the
@@ -359,18 +364,8 @@ func ReferenceFromInterpolatedVar(v config.InterpolatedVariable) []string {
 	}
 }
 
-func modulePrefixStr(p []string) string {
-	// strip "root"
-	if len(p) > 0 && p[0] == rootModulePath[0] {
-		p = p[1:]
-	}
-
-	parts := make([]string, 0, len(p)*2)
-	for _, p := range p {
-		parts = append(parts, "module", p)
-	}
-
-	return strings.Join(parts, ".")
+func modulePrefixStr(p addrs.ModuleInstance) string {
+	return p.String()
 }
 
 func modulePrefixList(result []string, prefix string) []string {
